@@ -1,0 +1,14 @@
+{
+  "name": "map-ui-common",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./map-core": "./src/map-core/map-core.js",
+    "./ui/search-tile": "./src/ui/search-tile.js",
+    "./ui/shared-map-ui.css": "./src/ui/shared-map-ui.css"
+  },
+  "files": [
+    "src"
+  ]
+}
