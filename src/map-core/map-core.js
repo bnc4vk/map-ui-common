@@ -8,15 +8,32 @@ function hideSymbolLabels(map) {
   });
 }
 
-function buildMatchExpression({ colorMap, defaultColor, featureProperty }) {
+function buildMatchExpression({
+  colorMap,
+  defaultColor,
+  featureProperty,
+  featureTransform,
+}) {
   const entries = Object.entries(colorMap || {}).flatMap(([code, color]) => [
     code,
     color,
   ]);
 
+  const baseExpression = ["get", featureProperty];
+  let matchExpression = baseExpression;
+  if (featureTransform === null) {
+    matchExpression = baseExpression;
+  } else if (typeof featureTransform === "function") {
+    matchExpression = featureTransform(baseExpression);
+  } else if (featureTransform) {
+    matchExpression = featureTransform;
+  } else if (featureProperty === "iso_3166_1") {
+    matchExpression = ["slice", baseExpression, 0, 2];
+  }
+
   return [
     "match",
-    ["slice", ["get", featureProperty], 0, 2],
+    matchExpression,
     ...entries,
     defaultColor,
   ];
@@ -56,75 +73,203 @@ export function createMap({
   });
 
   const { id: sourceId, source } = vectorSourceConfig;
-  const { baseLayer, overlayLayer, interactionLayerId, fadeDurationMs } =
-    layerConfig;
+  const {
+    baseLayer,
+    overlayLayer,
+    interactionLayerId,
+    fadeDurationMs,
+    levels,
+  } = layerConfig;
 
-  let displayedLayerIsBase = true;
+  const resolvedLevels =
+    levels?.length > 0
+      ? levels.map((level) => {
+          const levelLayerIds = level.layerIds || {};
+          const baseId = levelLayerIds.base || `${level.id}-base`;
+          const overlayId = levelLayerIds.overlay || `${level.id}-overlay`;
+          return {
+            ...level,
+            layerIds: {
+              base: baseId,
+              overlay: overlayId,
+              interaction:
+                levelLayerIds.interaction ||
+                levelLayerIds.overlay ||
+                overlayId ||
+                baseId,
+            },
+          };
+        })
+      : [
+          {
+            id: "default",
+            featureProperty: layerConfig.featureProperty,
+            layerIds: {
+              base: baseLayer.id,
+              overlay: overlayLayer.id,
+              interaction:
+                interactionLayerId || overlayLayer.id || baseLayer.id,
+            },
+          },
+        ];
+
+  const levelDisplayStates = new Map(
+    resolvedLevels.map((level) => [level.id, true])
+  );
+  let activeLevelId = resolvedLevels[0]?.id;
+
+  const getLevelIdForZoom = (zoomLevel) => {
+    const matchedLevel = resolvedLevels.find((level) => {
+      const minZoom = level.minZoom ?? -Infinity;
+      const maxZoom = level.maxZoom ?? Infinity;
+      return zoomLevel >= minZoom && zoomLevel <= maxZoom;
+    });
+    return matchedLevel?.id || resolvedLevels[0]?.id;
+  };
 
   map.on("load", () => {
     map.addSource(sourceId, source);
 
-    map.addLayer({
-      ...baseLayer,
-      source: sourceId,
+    resolvedLevels.forEach((level) => {
+      const minZoom = level.minZoom ?? baseLayer.minzoom;
+      const maxZoom = level.maxZoom ?? baseLayer.maxzoom;
+
+      map.addLayer({
+        ...baseLayer,
+        id: level.layerIds.base,
+        minzoom: minZoom,
+        maxzoom: maxZoom,
+        source: sourceId,
+      });
+
+      map.addLayer(
+        {
+          ...overlayLayer,
+          id: level.layerIds.overlay,
+          minzoom: minZoom,
+          maxzoom: maxZoom,
+          source: sourceId,
+        },
+        level.layerIds.base
+      );
     });
 
-    map.addLayer(
-      {
-        ...overlayLayer,
-        source: sourceId,
-      },
-      baseLayer.id
+    const targetLayerIds = Array.from(
+      new Set(
+        resolvedLevels
+          .map((level) => level.layerIds.interaction)
+          .filter(Boolean)
+      )
     );
 
-    const targetLayerId =
-      interactionLayerId || overlayLayer.id || baseLayer.id;
-
     if (onFeatureClick) {
-      map.on("click", targetLayerId, (event) => {
-        onFeatureClick({
-          feature: event.features?.[0],
-          features: event.features,
-          lngLat: event.lngLat,
-          point: event.point,
-          originalEvent: event.originalEvent,
-          event,
+      targetLayerIds.forEach((layerId) => {
+        map.on("click", layerId, (event) => {
+          onFeatureClick({
+            feature: event.features?.[0],
+            features: event.features,
+            lngLat: event.lngLat,
+            point: event.point,
+            originalEvent: event.originalEvent,
+            event,
+          });
         });
       });
     }
 
     if (onFeatureHover) {
-      map.on("mousemove", targetLayerId, (event) => {
-        onFeatureHover({
-          feature: event.features?.[0],
-          features: event.features,
-          lngLat: event.lngLat,
-          point: event.point,
-          originalEvent: event.originalEvent,
-          event,
+      targetLayerIds.forEach((layerId) => {
+        map.on("mousemove", layerId, (event) => {
+          onFeatureHover({
+            feature: event.features?.[0],
+            features: event.features,
+            lngLat: event.lngLat,
+            point: event.point,
+            originalEvent: event.originalEvent,
+            event,
+          });
         });
       });
     }
+
+    activeLevelId = getLevelIdForZoom(map.getZoom());
+  });
+
+  map.on("zoom", () => {
+    activeLevelId = getLevelIdForZoom(map.getZoom());
   });
 
   function updateFillColors({
     colorExpression,
     colorMap,
     defaultColor = "#666666",
-    featureProperty = "iso_3166_1",
+    featureProperty,
+    featureTransform,
     opacity = 0.8,
+    levelId,
   }) {
+    const resolvedLevelId =
+      levelId ||
+      resolvedLevels.find((level) => level.featureProperty === featureProperty)
+        ?.id ||
+      activeLevelId;
+    const level =
+      resolvedLevels.find((levelToMatch) => levelToMatch.id === resolvedLevelId) ||
+      resolvedLevels[0];
+
+    const resolvedFeatureProperty =
+      featureProperty ?? level.featureProperty ?? "iso_3166_1";
+    const resolvedFeatureTransform =
+      featureTransform ?? level.featureTransform;
+
     const resolvedExpression =
       colorExpression ||
       buildMatchExpression({
         colorMap,
         defaultColor,
-        featureProperty,
+        featureProperty: resolvedFeatureProperty,
+        featureTransform: resolvedFeatureTransform,
       });
 
-    const layerToHide = displayedLayerIsBase ? baseLayer.id : overlayLayer.id;
-    const layerToShow = displayedLayerIsBase ? overlayLayer.id : baseLayer.id;
-    displayedLayerIsBase = !displayedLayerIsBase;
+    const resolveDisplayedLayerIsBase = () => {
+      const cachedState = levelDisplayStates.get(level.id);
+      if (cachedState !== undefined) {
+        return cachedState;
+      }
+
+      const baseLayerOpacity = map.getPaintProperty(
+        level.layerIds.base,
+        "fill-opacity"
+      );
+      const overlayLayerOpacity = map.getPaintProperty(
+        level.layerIds.overlay,
+        "fill-opacity"
+      );
+
+      const resolvedBaseOpacity =
+        typeof baseLayerOpacity === "number" ? baseLayerOpacity : 1;
+      const resolvedOverlayOpacity =
+        typeof overlayLayerOpacity === "number" ? overlayLayerOpacity : 1;
+
+      if (resolvedBaseOpacity === 0 && resolvedOverlayOpacity !== 0) {
+        return false;
+      }
+
+      if (resolvedOverlayOpacity === 0 && resolvedBaseOpacity !== 0) {
+        return true;
+      }
+
+      return true;
+    };
+
+    const displayedLayerIsBase = resolveDisplayedLayerIsBase();
+    const layerToHide = displayedLayerIsBase
+      ? level.layerIds.base
+      : level.layerIds.overlay;
+    const layerToShow = displayedLayerIsBase
+      ? level.layerIds.overlay
+      : level.layerIds.base;
+    levelDisplayStates.set(level.id, !displayedLayerIsBase);
 
     map.setPaintProperty(layerToShow, "fill-color", resolvedExpression);
 
