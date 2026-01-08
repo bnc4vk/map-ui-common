@@ -1,0 +1,29 @@
+.map-ui-date-range {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  font-family: system-ui, sans-serif;
+}
+
+.map-ui-date-range__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #1f2937;
+}
+
+.map-ui-date-range__label {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.map-ui-date-range__input {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  background-color: #fff;
+  color: #111827;
+}

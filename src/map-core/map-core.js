@@ -22,6 +22,44 @@ function buildMatchExpression({ colorMap, defaultColor, featureProperty }) {
   ];
 }
 
+function createFillColorUpdater(map, { baseLayer, overlayLayer, fadeDurationMs }) {
+  let displayedLayerIsBase = true;
+
+  return function updateFillColors({
+    colorExpression,
+    colorMap,
+    defaultColor = "#666666",
+    featureProperty = "iso_3166_1",
+    opacity = 0.8,
+  }) {
+    const resolvedExpression =
+      colorExpression ||
+      buildMatchExpression({
+        colorMap,
+        defaultColor,
+        featureProperty,
+      });
+
+    const layerToHide = displayedLayerIsBase ? baseLayer.id : overlayLayer.id;
+    const layerToShow = displayedLayerIsBase ? overlayLayer.id : baseLayer.id;
+    displayedLayerIsBase = !displayedLayerIsBase;
+
+    map.setPaintProperty(layerToShow, "fill-color", resolvedExpression);
+
+    map.setPaintProperty(layerToHide, "fill-opacity-transition", {
+      duration: fadeDurationMs ?? DEFAULT_FADE_DURATION_MS,
+      delay: 0,
+    });
+    map.setPaintProperty(layerToHide, "fill-opacity", 0);
+
+    map.setPaintProperty(layerToShow, "fill-opacity-transition", {
+      duration: fadeDurationMs ?? DEFAULT_FADE_DURATION_MS,
+      delay: 0,
+    });
+    map.setPaintProperty(layerToShow, "fill-opacity", opacity);
+  };
+}
+
 export function createMap({
   containerId,
   mapStyle,
@@ -59,7 +97,11 @@ export function createMap({
   const { baseLayer, overlayLayer, interactionLayerId, fadeDurationMs } =
     layerConfig;
 
-  let displayedLayerIsBase = true;
+  const updateFillColors = createFillColorUpdater(map, {
+    baseLayer,
+    overlayLayer,
+    fadeDurationMs,
+  });
 
   map.on("load", () => {
     map.addSource(sourceId, source);
@@ -107,39 +149,139 @@ export function createMap({
     }
   });
 
-  function updateFillColors({
-    colorExpression,
-    colorMap,
-    defaultColor = "#666666",
-    featureProperty = "iso_3166_1",
-    opacity = 0.8,
-  }) {
-    const resolvedExpression =
-      colorExpression ||
-      buildMatchExpression({
-        colorMap,
-        defaultColor,
-        featureProperty,
-      });
+  return { map, updateFillColors };
+}
 
-    const layerToHide = displayedLayerIsBase ? baseLayer.id : overlayLayer.id;
-    const layerToShow = displayedLayerIsBase ? overlayLayer.id : baseLayer.id;
-    displayedLayerIsBase = !displayedLayerIsBase;
+function resolveLevelId(levels, zoom, fallbackId) {
+  const matchedLevel = levels.find(
+    (level) =>
+      (level.minZoom === undefined || zoom >= level.minZoom) &&
+      (level.maxZoom === undefined || zoom < level.maxZoom)
+  );
 
-    map.setPaintProperty(layerToShow, "fill-color", resolvedExpression);
+  return matchedLevel?.id || fallbackId || levels[0]?.id;
+}
 
-    map.setPaintProperty(layerToHide, "fill-opacity-transition", {
-      duration: fadeDurationMs ?? DEFAULT_FADE_DURATION_MS,
-      delay: 0,
-    });
-    map.setPaintProperty(layerToHide, "fill-opacity", 0);
-
-    map.setPaintProperty(layerToShow, "fill-opacity-transition", {
-      duration: fadeDurationMs ?? DEFAULT_FADE_DURATION_MS,
-      delay: 0,
-    });
-    map.setPaintProperty(layerToShow, "fill-opacity", opacity);
+export function createLevelAwareMap({
+  containerId,
+  mapStyle,
+  center,
+  zoom,
+  projection = "mercator",
+  levels,
+  onLevelChange,
+  onFeatureClick,
+  onFeatureHover,
+}) {
+  if (!Array.isArray(levels) || levels.length === 0) {
+    throw new Error("createLevelAwareMap requires a non-empty levels array.");
   }
 
-  return { map, updateFillColors };
+  const initialLevelId = resolveLevelId(levels, zoom, levels[0].id);
+  const initialLevel = levels.find((level) => level.id === initialLevelId);
+
+  if (!initialLevel) {
+    throw new Error("Initial level config not found.");
+  }
+
+  const { map } = createMap({
+    containerId,
+    mapStyle,
+    center,
+    zoom,
+    projection,
+    vectorSourceConfig: initialLevel.vectorSourceConfig,
+    layerConfig: initialLevel.layerConfig,
+    onFeatureClick,
+    onFeatureHover,
+  });
+
+  const levelConfigs = new Map(
+    levels.map((level) => [
+      level.id,
+      {
+        ...level,
+        updateFillColors: createFillColorUpdater(map, level.layerConfig),
+      },
+    ])
+  );
+
+  let activeLevelId = initialLevelId;
+
+  map.on("load", () => {
+    levels.forEach((level) => {
+      if (level.id === initialLevelId) {
+        return;
+      }
+
+      const { id: sourceId, source } = level.vectorSourceConfig;
+      map.addSource(sourceId, source);
+
+      map.addLayer({
+        ...level.layerConfig.baseLayer,
+        source: sourceId,
+        layout: {
+          ...level.layerConfig.baseLayer.layout,
+          visibility: "none",
+        },
+      });
+
+      map.addLayer(
+        {
+          ...level.layerConfig.overlayLayer,
+          source: sourceId,
+          layout: {
+            ...level.layerConfig.overlayLayer.layout,
+            visibility: "none",
+          },
+        },
+        level.layerConfig.baseLayer.id
+      );
+    });
+  });
+
+  function setLevel(levelId) {
+    if (!levelConfigs.has(levelId)) {
+      throw new Error(`Unknown levelId: ${levelId}`);
+    }
+
+    if (activeLevelId === levelId) {
+      return;
+    }
+
+    levels.forEach((level) => {
+      const visibility = level.id === levelId ? "visible" : "none";
+      map.setLayoutProperty(
+        level.layerConfig.baseLayer.id,
+        "visibility",
+        visibility
+      );
+      map.setLayoutProperty(
+        level.layerConfig.overlayLayer.id,
+        "visibility",
+        visibility
+      );
+    });
+
+    activeLevelId = levelId;
+    onLevelChange?.(levelId);
+  }
+
+  function updateLevelFillColors(levelId, options) {
+    const levelConfig = levelConfigs.get(levelId);
+    if (!levelConfig) {
+      throw new Error(`Unknown levelId: ${levelId}`);
+    }
+
+    levelConfig.updateFillColors(options);
+  }
+
+  return {
+    map,
+    getCurrentLevelId: () => activeLevelId,
+    resolveLevelId: (nextZoom) =>
+      resolveLevelId(levels, nextZoom, activeLevelId),
+    setLevel,
+    updateLevelFillColors,
+  };
 }
