@@ -8,28 +8,50 @@ function hideSymbolLabels(map) {
   });
 }
 
-function buildMatchExpression({ colorMap, defaultColor, featureProperty }) {
+function buildMatchExpression({
+  colorMap,
+  defaultColor,
+  featureProperty,
+  featureTransform,
+}) {
   const entries = Object.entries(colorMap || {}).flatMap(([code, color]) => [
     code,
     color,
   ]);
 
+  const baseExpression = ["get", featureProperty];
+  const resolvedExpression = featureTransform
+    ? typeof featureTransform === "function"
+      ? featureTransform(baseExpression)
+      : featureTransform
+    : baseExpression;
+
   return [
     "match",
-    ["slice", ["get", featureProperty], 0, 2],
+    resolvedExpression,
     ...entries,
     defaultColor,
   ];
 }
 
-function createFillColorUpdater(map, { baseLayer, overlayLayer, fadeDurationMs }) {
+function createFillColorUpdater(
+  map,
+  {
+    baseLayer,
+    overlayLayer,
+    fadeDurationMs,
+    defaultFeatureProperty,
+    defaultFeatureTransform,
+  }
+) {
   let displayedLayerIsBase = true;
 
   return function updateFillColors({
     colorExpression,
     colorMap,
     defaultColor = "#666666",
-    featureProperty = "iso_3166_1",
+    featureProperty = defaultFeatureProperty || "iso_3166_1",
+    featureTransform = defaultFeatureTransform,
     opacity = 0.8,
   }) {
     const resolvedExpression =
@@ -38,6 +60,7 @@ function createFillColorUpdater(map, { baseLayer, overlayLayer, fadeDurationMs }
         colorMap,
         defaultColor,
         featureProperty,
+        featureTransform,
       });
 
     const layerToHide = displayedLayerIsBase ? baseLayer.id : overlayLayer.id;
@@ -75,7 +98,10 @@ export function createMap({
     throw new Error("vectorSourceConfig requires id and source.");
   }
 
-  if (!layerConfig?.baseLayer || !layerConfig?.overlayLayer) {
+  if (
+    !layerConfig?.levels &&
+    (!layerConfig?.baseLayer || !layerConfig?.overlayLayer)
+  ) {
     throw new Error("layerConfig requires baseLayer and overlayLayer.");
   }
 
@@ -94,58 +120,224 @@ export function createMap({
   });
 
   const { id: sourceId, source } = vectorSourceConfig;
-  const { baseLayer, overlayLayer, interactionLayerId, fadeDurationMs } =
-    layerConfig;
+  const { fadeDurationMs } = layerConfig;
+  const levels = layerConfig.levels;
+  const resolveLayerIds = (level) => {
+    const layerIds = level?.layerIds || {};
+    const baseLayerId =
+      layerIds.baseLayerId ||
+      layerIds.base ||
+      layerIds[0] ||
+      level?.baseLayer?.id;
+    const overlayLayerId =
+      layerIds.overlayLayerId ||
+      layerIds.overlay ||
+      layerIds[1] ||
+      level?.overlayLayer?.id;
+    const interactionLayerId =
+      layerIds.interactionLayerId ||
+      layerIds.interaction ||
+      level?.interactionLayerId ||
+      overlayLayerId ||
+      baseLayerId;
 
-  const updateFillColors = createFillColorUpdater(map, {
-    baseLayer,
-    overlayLayer,
-    fadeDurationMs,
-  });
-
-  map.on("load", () => {
-    map.addSource(sourceId, source);
-
-    map.addLayer({
-      ...baseLayer,
-      source: sourceId,
-    });
-
-    map.addLayer(
-      {
-        ...overlayLayer,
-        source: sourceId,
-      },
-      baseLayer.id
-    );
-
-    const targetLayerId =
-      interactionLayerId || overlayLayer.id || baseLayer.id;
-
-    if (onFeatureClick) {
-      map.on("click", targetLayerId, (event) => {
-        onFeatureClick({
-          feature: event.features?.[0],
-          features: event.features,
-          lngLat: event.lngLat,
-          point: event.point,
-          originalEvent: event.originalEvent,
-          event,
-        });
-      });
+    if (!baseLayerId || !overlayLayerId) {
+      throw new Error(
+        `Level ${level?.id || "unknown"} requires base/overlay layer ids.`
+      );
     }
 
-    if (onFeatureHover) {
-      map.on("mousemove", targetLayerId, (event) => {
-        onFeatureHover({
-          feature: event.features?.[0],
-          features: event.features,
-          lngLat: event.lngLat,
-          point: event.point,
-          originalEvent: event.originalEvent,
-          event,
-        });
+    return { baseLayerId, overlayLayerId, interactionLayerId };
+  };
+
+  let updateFillColors;
+  let activeLevelId = levels
+    ? resolveLevelId(levels, zoom, levels[0]?.id)
+    : undefined;
+  const levelConfigs = levels
+    ? new Map(
+        levels.map((level) => {
+          const { baseLayerId, overlayLayerId, interactionLayerId } =
+            resolveLayerIds(level);
+          const updater = createFillColorUpdater(map, {
+            baseLayer: { id: baseLayerId },
+            overlayLayer: { id: overlayLayerId },
+            fadeDurationMs: level.fadeDurationMs ?? fadeDurationMs,
+            defaultFeatureProperty: level.featureProperty,
+            defaultFeatureTransform: level.featureTransform,
+          });
+
+          return [
+            level.id,
+            {
+              ...level,
+              baseLayerId,
+              overlayLayerId,
+              interactionLayerId,
+              updateFillColors: updater,
+            },
+          ];
+        })
+      )
+    : null;
+
+  if (levels) {
+    updateFillColors = function updateLevelFillColors({
+      levelId = activeLevelId,
+      ...options
+    }) {
+      const levelConfig = levelConfigs.get(levelId);
+      if (!levelConfig) {
+        throw new Error(`Unknown levelId: ${levelId}`);
+      }
+
+      levelConfig.updateFillColors(options);
+    };
+  } else {
+    const { baseLayer, overlayLayer } = layerConfig;
+    updateFillColors = createFillColorUpdater(map, {
+      baseLayer,
+      overlayLayer,
+      fadeDurationMs,
+    });
+  }
+
+  map.on("load", () => {
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, source);
+    }
+
+    if (levels) {
+      levels.forEach((level) => {
+        const { baseLayerId, overlayLayerId } = resolveLayerIds(level);
+        const isActive = level.id === activeLevelId;
+        const baseVisibility = isActive ? "visible" : "none";
+        const overlayVisibility = isActive ? "visible" : "none";
+
+        if (level.baseLayer && !map.getLayer(baseLayerId)) {
+          map.addLayer({
+            ...level.baseLayer,
+            source: sourceId,
+            layout: {
+              ...level.baseLayer.layout,
+              visibility: baseVisibility,
+            },
+          });
+        } else {
+          map.setLayoutProperty(baseLayerId, "visibility", baseVisibility);
+        }
+
+        if (level.overlayLayer && !map.getLayer(overlayLayerId)) {
+          map.addLayer(
+            {
+              ...level.overlayLayer,
+              source: sourceId,
+              layout: {
+                ...level.overlayLayer.layout,
+                visibility: overlayVisibility,
+              },
+            },
+            baseLayerId
+          );
+        } else {
+          map.setLayoutProperty(overlayLayerId, "visibility", overlayVisibility);
+        }
       });
+
+      if (onFeatureClick) {
+        levels.forEach((level) => {
+          const { interactionLayerId } = resolveLayerIds(level);
+          map.on("click", interactionLayerId, (event) => {
+            onFeatureClick({
+              feature: event.features?.[0],
+              features: event.features,
+              lngLat: event.lngLat,
+              point: event.point,
+              originalEvent: event.originalEvent,
+              event,
+            });
+          });
+        });
+      }
+
+      if (onFeatureHover) {
+        levels.forEach((level) => {
+          const { interactionLayerId } = resolveLayerIds(level);
+          map.on("mousemove", interactionLayerId, (event) => {
+            onFeatureHover({
+              feature: event.features?.[0],
+              features: event.features,
+              lngLat: event.lngLat,
+              point: event.point,
+              originalEvent: event.originalEvent,
+              event,
+            });
+          });
+        });
+      }
+
+      map.on("zoom", () => {
+        const nextLevelId = resolveLevelId(
+          levels,
+          map.getZoom(),
+          activeLevelId
+        );
+        if (nextLevelId === activeLevelId) {
+          return;
+        }
+
+        levels.forEach((level) => {
+          const { baseLayerId, overlayLayerId } = resolveLayerIds(level);
+          const visibility = level.id === nextLevelId ? "visible" : "none";
+          map.setLayoutProperty(baseLayerId, "visibility", visibility);
+          map.setLayoutProperty(overlayLayerId, "visibility", visibility);
+        });
+
+        activeLevelId = nextLevelId;
+      });
+    } else {
+      const { baseLayer, overlayLayer, interactionLayerId } = layerConfig;
+      map.addLayer({
+        ...baseLayer,
+        source: sourceId,
+      });
+
+      map.addLayer(
+        {
+          ...overlayLayer,
+          source: sourceId,
+        },
+        baseLayer.id
+      );
+
+      const targetLayerId =
+        interactionLayerId || overlayLayer.id || baseLayer.id;
+
+      if (onFeatureClick) {
+        map.on("click", targetLayerId, (event) => {
+          onFeatureClick({
+            feature: event.features?.[0],
+            features: event.features,
+            lngLat: event.lngLat,
+            point: event.point,
+            originalEvent: event.originalEvent,
+            event,
+          });
+        });
+      }
+
+      if (onFeatureHover) {
+        map.on("mousemove", targetLayerId, (event) => {
+          onFeatureHover({
+            feature: event.features?.[0],
+            features: event.features,
+            lngLat: event.lngLat,
+            point: event.point,
+            originalEvent: event.originalEvent,
+            event,
+          });
+        });
+      }
     }
   });
 
