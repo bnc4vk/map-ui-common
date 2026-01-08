@@ -20,10 +20,16 @@ function buildMatchExpression({
   ]);
 
   const baseExpression = ["get", featureProperty];
-  const matchExpression =
-    typeof featureTransform === "function"
-      ? featureTransform(baseExpression)
-      : featureTransform || baseExpression;
+  let matchExpression = baseExpression;
+  if (featureTransform === null) {
+    matchExpression = baseExpression;
+  } else if (typeof featureTransform === "function") {
+    matchExpression = featureTransform(baseExpression);
+  } else if (featureTransform) {
+    matchExpression = featureTransform;
+  } else if (featureProperty === "iso_3166_1") {
+    matchExpression = ["slice", baseExpression, 0, 2];
+  }
 
   return [
     "match",
