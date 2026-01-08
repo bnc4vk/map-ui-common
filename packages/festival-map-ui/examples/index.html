@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Festival Map UI Demo</title>
+    <link
+      href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../src/styles.css" />
+    <link rel="stylesheet" href="../../../src/ui/date-range.css" />
+    <link rel="stylesheet" href="../../../src/ui/shared-map-ui.css" />
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+  </head>
+  <body>
+    <div class="festival-map-layout">
+      <aside class="festival-map-sidebar">
+        <div class="festival-map-panel">
+          <div id="festival-date-range"></div>
+        </div>
+        <div class="festival-map-panel">
+          <div id="festival-legend"></div>
+        </div>
+        <div class="festival-map-panel">
+          <div id="festival-loading"></div>
+        </div>
+      </aside>
+      <div class="festival-map-container">
+        <div id="festival-map" class="festival-map"></div>
+      </div>
+    </div>
+    <script type="module" src="./demo.js"></script>
+  </body>
+</html>
