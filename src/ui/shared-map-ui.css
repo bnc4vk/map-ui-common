@@ -82,6 +82,28 @@
   transform: scale(1.02);
 }
 
+.tile.date-range-tile {
+  background: var(--map-ui-search-bg);
+  backdrop-filter: blur(8px);
+  border-radius: 999px;
+  padding: 8px 16px;
+  box-shadow: var(--map-ui-search-shadow);
+  transition: width 0.3s ease, box-shadow 0.3s ease, transform 0.2s ease,
+    background-color 0.2s ease;
+  display: flex;
+  align-items: center;
+  width: 360px;
+  max-width: 100%;
+  margin: 0 auto;
+  flex: 0 0 auto;
+}
+
+.tile.date-range-tile:hover {
+  background: var(--map-ui-search-bg-hover);
+  box-shadow: var(--map-ui-search-shadow-hover);
+  transform: scale(1.02);
+}
+
 .tile.search-tile.expanded .search-icon {
   display: none;
 }
@@ -128,6 +150,59 @@
 .search-input::placeholder {
   color: var(--map-ui-search-placeholder);
   font-style: normal;
+}
+
+.date-range-form {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+  background: transparent;
+  box-sizing: border-box;
+}
+
+.date-range-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 14px;
+  color: var(--map-ui-search-input);
+  padding: 0;
+  margin: 0;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+.date-range-input::-webkit-calendar-picker-indicator {
+  opacity: 0.7;
+}
+
+.date-range-submit {
+  background: transparent;
+  border: 1px solid var(--map-ui-search-submit);
+  color: var(--map-ui-search-submit);
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 4px 24px 4px 10px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  white-space: nowrap;
+}
+
+.date-range-submit:hover {
+  border-color: var(--map-ui-search-submit-hover);
+  color: var(--map-ui-search-submit-hover);
+}
+
+.date-range-submit .spinner {
+  position: absolute;
+  right: 8px;
 }
 
 .search-submit {
