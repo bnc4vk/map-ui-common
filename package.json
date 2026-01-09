@@ -8,9 +8,9 @@
     "./map-core/config": "./src/map-core/config.js",
     "./ui/date-range": "./src/ui/date-range.js",
     "./ui/date-range.css": "./src/ui/date-range.css",
+    "./ui/map-legend": "./src/ui/map-legend.js",
     "./ui/search-tile": "./src/ui/search-tile.js",
     "./ui/shared-map-ui.css": "./src/ui/shared-map-ui.css"
-
   },
   "files": [
     "src"
